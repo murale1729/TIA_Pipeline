@@ -43,7 +43,7 @@ process stain_normalization {
 
     script:
     """
-    python ${params.scripts}/stain_normalization.py --input $wsi_file --output normalized_wsi.png --method vahadane
+    python ${params.scripts}/stain_normalization.py --input $wsi_file --output ${params.outdir}normalized_wsi.png --method vahadane
     """
 }
 
