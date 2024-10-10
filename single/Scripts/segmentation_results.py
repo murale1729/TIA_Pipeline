@@ -6,10 +6,16 @@ import json
 import numpy as np
 from scipy.spatial import distance
 import cv2
+import matplotlib.pyplot as plt
+from tiatoolbox.wsicore.wsireader import WSIReader
 from tiatoolbox.utils.misc import imread
+from tiatoolbox.utils.visualization import overlay_prediction_contours
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+# Patch extraction parameters
+bb = 128  # box size for patch extraction around each nucleus
 
 def load_segmentation_results(output_dir):
     """
@@ -80,8 +86,9 @@ def calculate_metrics(nuclei_predictions, input_img_shape, mpp_value):
 
         # Nearest neighbor distance
         distances = distance.cdist([nucleus['centroid']], centroids, 'euclidean')
-        nearest_distance = np.partition(distances.flatten(), 1)[1]  # Skip distance to itself
-        nearest_neighbor_distances.append(nearest_distance)
+        if len(distances) > 1:
+            nearest_distance = np.partition(distances.flatten(), 1)[1]  # Skip distance to itself
+            nearest_neighbor_distances.append(nearest_distance)
 
         # Nucleus type classification
         nucleus_type = nucleus.get('type', None)
@@ -138,27 +145,72 @@ def overlay_nuclei(input_img, nuclei_predictions, output_dir):
     """
     Visualize the nuclei segmentation by overlaying contours on the original image.
     """
-    img_copy = input_img.copy()
-    contours = []
-    
-    # Extract contours from segmentation data
-    for _, nucleus in nuclei_predictions.items():
-        contour = np.array(nucleus['contour'])
-        contours.append(contour)
-    
-    # Draw contours on the image
-    cv2.drawContours(img_copy, contours, -1, (0, 255, 0), 2)
+    # Define the color dictionary for nuclei types
+    color_dict = {
+        0: ("neoplastic epithelial", (255, 0, 0)),  # Red for neoplastic epithelial
+        1: ("Inflammatory", (255, 255, 0)),  # Yellow for inflammatory
+        2: ("Connective", (0, 255, 0)),  # Green for connective
+        3: ("Dead", (0, 0, 0)),  # Black for dead
+        4: ("non-neoplastic epithelial", (0, 0, 255)),  # Blue for non-neoplastic epithelial
+    }
+
+    # Create the overlay image
+    overlaid_predictions = overlay_prediction_contours(
+        canvas=input_img,
+        inst_dict=nuclei_predictions,
+        draw_dot=False,
+        type_colours=color_dict,
+        line_thickness=4,
+    )
 
     # Save the image with contours
     output_img_path = os.path.join(output_dir, 'segmentation_overlay.png')
-    cv2.imwrite(output_img_path, img_copy)
+    cv2.imwrite(output_img_path, overlaid_predictions)
     logger.info(f"Segmentation overlay image saved at: {output_img_path}")
 
     return output_img_path
 
-def generate_report_with_overlay(output_dir, input_img_path, mpp_value, output_json):
+def visualize_patches(nuclei_predictions, wsi, rng, num_examples=4):
     """
-    Generate a metrics report, overlay image, and save them.
+    Visualize small patches around randomly selected nuclei and overlay the contours.
+    """
+    # Define the coloring dictionary
+    color_dict = {
+        0: ("background", (255, 165, 0)),
+        1: ("neoplastic epithelial", (255, 0, 0)),
+        2: ("Inflammatory", (255, 255, 0)),
+        3: ("Connective", (0, 255, 0)),
+        4: ("Dead", (0, 0, 0)),
+        5: ("non-neoplastic epithelial", (0, 0, 255)),
+    }
+
+    # Create a list of nucleus IDs to sample from
+    nuc_id_list = list(nuclei_predictions.keys())
+
+    fig = plt.figure(figsize=(12, 6))
+    
+    for i in range(num_examples):  # showing a few examples
+        selected_nuc_id = nuc_id_list[rng.integers(0, len(nuclei_predictions))]
+        sample_nuc = nuclei_predictions[selected_nuc_id]
+        cent = np.int32(sample_nuc["centroid"])  # centroid position in WSI coordinate system
+        contour = sample_nuc["contour"]  # nucleus contour points in WSI coordinate system
+        contour -= (cent - bb // 2)  # nucleus contour points in the small patch coordinate system
+
+        # Reading the nucleus small window neighborhood
+        nuc_patch = wsi.read_rect(cent - bb // 2, bb, resolution=0.25, units="mpp", coord_space="resolution")
+        overlaid_patch = cv2.drawContours(nuc_patch.copy(), [contour], -1, (255, 255, 0), 2)
+
+        # Plot the results
+        ax = plt.subplot(2, num_examples, i + 1), plt.imshow(nuc_patch), plt.axis("off")
+        ax = plt.subplot(2, num_examples, i + num_examples + 1), plt.imshow(overlaid_patch), plt.axis("off")
+        plt.title(color_dict[sample_nuc["type"]][0])
+    
+    plt.tight_layout()
+    plt.show()
+
+def generate_report_with_overlay(output_dir, input_img_path, mpp_value, output_json, wsi_file_name=None):
+    """
+    Generate a metrics report, overlay image, visualize patches, and save them.
     """
     # Load the input image
     logger.info(f"Loading input image: {input_img_path}")
@@ -185,15 +237,22 @@ def generate_report_with_overlay(output_dir, input_img_path, mpp_value, output_j
 
     logger.info(f"Metrics report saved to {output_json}")
 
+    # Optionally, display patches around selected nuclei
+    if wsi_file_name:
+        rng = np.random.default_rng()  # random number generator for selecting nuclei
+        wsi = WSIReader.open(wsi_file_name)
+        visualize_patches(nuclei_predictions, wsi, rng)
+
 if __name__ == "__main__":
     # Parsing input arguments
     import argparse
-    parser = argparse.ArgumentParser(description="Generate metrics and overlay image from segmentation results")
+    parser = argparse.ArgumentParser(description="Generate metrics, overlay image, and visualize patches from segmentation results")
     parser.add_argument('--output_dir', type=str, help='Directory with segmentation results', required=True)
     parser.add_argument('--input_img', type=str, help='Path to the original input image', required=True)
     parser.add_argument('--mpp', type=float, default=0.5, help='Microns per pixel (default: 0.5)')
     parser.add_argument('--output_json', type=str, help='Path to save the metrics report JSON', required=True)
+    parser.add_argument('--wsi_file_name', type=str, help='Path to the whole slide image (WSI) file', required=False)
     args = parser.parse_args()
 
-    # Generate the report and overlay image
-    generate_report_with_overlay(args.output_dir, args.input_img, args.mpp, args.output_json)
+    # Generate the report, overlay image, and visualize patches
+    generate_report_with_overlay(args.output_dir, args.input_img, args.mpp, args.output_json, args.wsi_file_name)
