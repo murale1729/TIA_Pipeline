@@ -162,7 +162,7 @@ else:
 logger.debug(f"Segmentation output: {output}")
 
 # Get the correct path to the output file
-output_dir_for_image = args.output_dir
+output_dir_for_image = unique_output_dir
 logger.info(f"Segmentation results saved in: {output_dir_for_image}")
 
 # Define the path to the instance map file
