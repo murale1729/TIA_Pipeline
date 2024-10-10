@@ -35,7 +35,7 @@ process stain_normalization {
         path wsi_file
 
     output:
-        path "${params.outdir}normalized_wsi.png"
+        path "normalized_wsi.png"
 
     publishDir "${params.outdir}", mode: 'copy'
 
