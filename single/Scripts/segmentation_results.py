@@ -182,6 +182,8 @@ def visualize_patches(nuclei_predictions, wsi, rng, output_dir, num_examples=4):
     """
     Visualize and save small patches around randomly selected nuclei with overlaid contours.
     """
+    logger.info("Starting patch visualization and saving.")
+    
     # Define the coloring dictionary
     color_dict = {
         0: ("background", (255, 165, 0)),
@@ -200,41 +202,62 @@ def visualize_patches(nuclei_predictions, wsi, rng, output_dir, num_examples=4):
     # Create a list of nucleus IDs to sample from
     nuc_id_list = list(nuclei_predictions.keys())
 
+    if len(nuc_id_list) == 0:
+        logger.warning("No nuclei found for patch visualization.")
+        return
+
     fig = plt.figure(figsize=(12, 6))
-    
+
     for i in range(num_examples):  # showing a few examples
-        selected_nuc_id = nuc_id_list[rng.integers(0, len(nuclei_predictions))]
-        sample_nuc = nuclei_predictions[selected_nuc_id]
-        cent = np.int32(sample_nuc["centroid"])  # centroid position in WSI coordinate system
-        contour = sample_nuc["contour"]  # nucleus contour points in WSI coordinate system
-        contour -= (cent - bb // 2)  # nucleus contour points in the small patch coordinate system
+        try:
+            selected_nuc_id = nuc_id_list[rng.integers(0, len(nuclei_predictions))]
+            sample_nuc = nuclei_predictions[selected_nuc_id]
+            cent = np.int32(sample_nuc["centroid"])  # centroid position in WSI coordinate system
+            contour = sample_nuc["contour"]  # nucleus contour points in WSI coordinate system
+            contour -= (cent - bb // 2)  # nucleus contour points in the small patch coordinate system
 
-        # Reading the nucleus small window neighborhood
-        nuc_patch = wsi.read_rect(cent - bb // 2, bb, resolution=0.25, units="mpp", coord_space="resolution")
-        overlaid_patch = cv2.drawContours(nuc_patch.copy(), [contour], -1, (255, 255, 0), 2)
+            # Reading the nucleus small window neighborhood
+            nuc_patch = wsi.read_rect(
+                location=cent - bb // 2,
+                size=(bb, bb),
+                resolution=0.25,
+                units="mpp",
+                pad_mode="constant",
+                interpolation="optimise",
+            )
 
-        # Save the patches
-        nucleus_type = sample_nuc.get("type", 6)
-        type_name = color_dict[nucleus_type][0]
-        base_filename = f"nucleus_{selected_nuc_id}_type_{type_name}"
-        original_patch_path = os.path.join(patches_dir, f"{base_filename}_original.png")
-        overlaid_patch_path = os.path.join(patches_dir, f"{base_filename}_overlay.png")
-        cv2.imwrite(original_patch_path, cv2.cvtColor(nuc_patch, cv2.COLOR_RGB2BGR))
-        cv2.imwrite(overlaid_patch_path, cv2.cvtColor(overlaid_patch, cv2.COLOR_RGB2BGR))
+            if nuc_patch is None or nuc_patch.size == 0:
+                logger.warning(f"Failed to extract patch for nucleus ID {selected_nuc_id}")
+                continue
+            else:
+                logger.info(f"Extracted patch for nucleus ID {selected_nuc_id}")
 
-        logger.info(f"Saved original patch: {original_patch_path}")
-        logger.info(f"Saved overlaid patch: {overlaid_patch_path}")
+            overlaid_patch = cv2.drawContours(nuc_patch.copy(), [contour], -1, (255, 255, 0), 2)
 
-        # Plot the results
-        plt.subplot(2, num_examples, i + 1)
-        plt.imshow(nuc_patch)
-        plt.axis("off")
+            # Save the patches
+            nucleus_type = sample_nuc.get("type", 6)
+            type_name = color_dict[nucleus_type][0]
+            base_filename = f"nucleus_{selected_nuc_id}_type_{type_name}"
+            original_patch_path = os.path.join(patches_dir, f"{base_filename}_original.png")
+            overlaid_patch_path = os.path.join(patches_dir, f"{base_filename}_overlay.png")
+            cv2.imwrite(original_patch_path, cv2.cvtColor(nuc_patch, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(overlaid_patch_path, cv2.cvtColor(overlaid_patch, cv2.COLOR_RGB2BGR))
 
-        plt.subplot(2, num_examples, i + num_examples + 1)
-        plt.imshow(overlaid_patch)
-        plt.axis("off")
-        plt.title(type_name)
-    
+            logger.info(f"Saved original patch: {original_patch_path}")
+            logger.info(f"Saved overlaid patch: {overlaid_patch_path}")
+
+            # Plot the results
+            plt.subplot(2, num_examples, i + 1)
+            plt.imshow(nuc_patch)
+            plt.axis("off")
+
+            plt.subplot(2, num_examples, i + num_examples + 1)
+            plt.imshow(overlaid_patch)
+            plt.axis("off")
+            plt.title(type_name)
+        except Exception as e:
+            logger.exception(f"Exception occurred while processing nucleus ID {selected_nuc_id}: {e}")
+
     plt.tight_layout()
     # Save the figure with patches
     patches_figure_path = os.path.join(output_dir, 'nuclei_patches.png')
