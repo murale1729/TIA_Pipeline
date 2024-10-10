@@ -2,12 +2,6 @@ import argparse
 import os
 import sys
 import joblib
-import matplotlib.pyplot as plt
-from tiatoolbox.models.engine.nucleus_instance_segmentor import NucleusInstanceSegmentor
-from tiatoolbox.utils.misc import download_data, imread
-from tiatoolbox.utils.visualization import overlay_prediction_contours
-from tiatoolbox.wsicore.wsireader import WSIReader
-from skimage import measure
 import logging
 import torch
 import json
@@ -16,6 +10,10 @@ from scipy.spatial import distance
 import cv2
 import glob
 import datetime
+import tempfile
+from tiatoolbox.models.engine.nucleus_instance_segmentor import NucleusInstanceSegmentor
+from tiatoolbox.utils.misc import imread
+from tiatoolbox.wsicore.wsireader import WSIReader
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -51,8 +49,9 @@ if not os.path.exists(args.mask):
 if args.metadata and not os.path.exists(args.metadata):
     logger.error(f"Metadata file does not exist: {args.metadata}")
     sys.exit(1)
-# Ensure output directory exists
-os.makedirs(args.output_dir, exist_ok=True)
+# Ensure output directory exists (but do not create the save_dir for TIAToolbox)
+if not os.path.exists(args.output_dir):
+    os.makedirs(args.output_dir)
 
 # Load metadata
 if args.metadata:
@@ -102,7 +101,7 @@ if args.mode == "wsi":
         )
     except Exception as e:
         logger.exception(f"Segmentation failed for WSI: {e}")
-        exit(1)
+        sys.exit(1)
 else:
     logger.info(f"Running segmentation on Tile: {args.input}")
 
@@ -140,36 +139,38 @@ else:
     logger.info("Applying tissue mask to the input image.")
     masked_img = cv2.bitwise_and(input_img, input_img, mask=tissue_mask_binary)
 
-    # Save masked_img to a temporary file (this ensures we pass a file path to segmentor.predict)
-    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    unique_output_dir = os.path.join(args.output_dir, f"nuclei_run_{timestamp}")
-    os.makedirs(unique_output_dir, exist_ok=True)  # Ensure the directory exists
-
-    masked_img_path = os.path.join(unique_output_dir, 'masked_image.png')
+    # Save masked_img to a temporary file
+    temp_dir = tempfile.gettempdir()
+    masked_img_path = os.path.join(temp_dir, f"masked_image_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
     cv2.imwrite(masked_img_path, masked_img)
     logger.info(f"Masked image saved at: {masked_img_path}")
 
-    logger.info(f"Saving Nuclei results in {unique_output_dir}")
+    # Generate a unique output directory name but do not create it
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    unique_output_dir = os.path.join(args.output_dir, f"nuclei_run_{timestamp}")
+    logger.info(f"Results will be saved in: {unique_output_dir}")
+
     try:
+        # Run segmentation, using the unique output directory
         output = segmentor.predict(
-            imgs=[masked_img_path],  # Pass the file path, not the ndarray
-            save_dir=unique_output_dir,
+            imgs=[masked_img_path],  # Pass the file path of the masked image
+            save_dir=unique_output_dir,  # Do not create this directory beforehand
             mode='tile',
             on_gpu=args.gpu,
             crash_on_exception=False
         )
     except Exception as e:
         logger.exception(f"Segmentation failed for Tile: {e}")
-        exit(1)
+        sys.exit(1)
 
 logger.debug(f"Segmentation output: {output}")
 
-# Get the correct path to the output file
+# Use the unique output directory
 output_dir_for_image = unique_output_dir
 logger.info(f"Segmentation results saved in: {output_dir_for_image}")
 
 # Define the path to the instance map file
-# Find .dat files in the output directory
+# Find .dat files in the unique output directory
 dat_files = glob.glob(os.path.join(output_dir_for_image, '*.dat'))
 if not dat_files:
     logger.error(f"No .dat files found in {output_dir_for_image}")
