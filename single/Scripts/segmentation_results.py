@@ -86,7 +86,7 @@ def calculate_metrics(nuclei_predictions, input_img_shape, mpp_value):
 
         # Nearest neighbor distance
         distances = distance.cdist([nucleus['centroid']], centroids, 'euclidean')
-        if len(distances) > 1:
+        if len(distances.flatten()) > 1:
             nearest_distance = np.partition(distances.flatten(), 1)[1]  # Skip distance to itself
             nearest_neighbor_distances.append(nearest_distance)
 
@@ -147,12 +147,20 @@ def overlay_nuclei(input_img, nuclei_predictions, output_dir):
     """
     # Define the color dictionary for nuclei types
     color_dict = {
-        0: ("neoplastic epithelial", (255, 0, 0)),  # Red for neoplastic epithelial
-        1: ("Inflammatory", (255, 255, 0)),  # Yellow for inflammatory
-        2: ("Connective", (0, 255, 0)),  # Green for connective
-        3: ("Dead", (0, 0, 0)),  # Black for dead
-        4: ("non-neoplastic epithelial", (0, 0, 255)),  # Blue for non-neoplastic epithelial
+        0: ("background", (255, 165, 0)),  # Orange for background
+        1: ("neoplastic epithelial", (255, 0, 0)),  # Red
+        2: ("Inflammatory", (255, 255, 0)),  # Yellow
+        3: ("Connective", (0, 255, 0)),  # Green
+        4: ("Dead", (0, 0, 0)),  # Black
+        5: ("non-neoplastic epithelial", (0, 0, 255)),  # Blue
+        6: ("Unknown Type", (128, 128, 128)),  # Gray for unknown types
     }
+
+    # Assign default type for unknown types
+    for nucleus in nuclei_predictions.values():
+        nucleus_type = nucleus.get("type", None)
+        if nucleus_type not in color_dict:
+            nucleus["type"] = 6  # Assign to 'Unknown Type'
 
     # Create the overlay image
     overlaid_predictions = overlay_prediction_contours(
@@ -182,6 +190,7 @@ def visualize_patches(nuclei_predictions, wsi, rng, num_examples=4):
         3: ("Connective", (0, 255, 0)),
         4: ("Dead", (0, 0, 0)),
         5: ("non-neoplastic epithelial", (0, 0, 255)),
+        6: ("Unknown Type", (128, 128, 128)),  # Gray for unknown types
     }
 
     # Create a list of nucleus IDs to sample from
@@ -201,8 +210,13 @@ def visualize_patches(nuclei_predictions, wsi, rng, num_examples=4):
         overlaid_patch = cv2.drawContours(nuc_patch.copy(), [contour], -1, (255, 255, 0), 2)
 
         # Plot the results
-        ax = plt.subplot(2, num_examples, i + 1), plt.imshow(nuc_patch), plt.axis("off")
-        ax = plt.subplot(2, num_examples, i + num_examples + 1), plt.imshow(overlaid_patch), plt.axis("off")
+        plt.subplot(2, num_examples, i + 1)
+        plt.imshow(nuc_patch)
+        plt.axis("off")
+
+        plt.subplot(2, num_examples, i + num_examples + 1)
+        plt.imshow(overlaid_patch)
+        plt.axis("off")
         plt.title(color_dict[sample_nuc["type"]][0])
     
     plt.tight_layout()
@@ -221,6 +235,12 @@ def generate_report_with_overlay(output_dir, input_img_path, mpp_value, output_j
 
     # Load the segmentation results
     nuclei_predictions = load_segmentation_results(output_dir)
+
+    # Print unique types in nuclei_predictions
+    unique_types = set()
+    for nucleus in nuclei_predictions.values():
+        unique_types.add(nucleus.get("type", None))
+    logger.info(f"Unique nucleus types in data: {unique_types}")
 
     # Generate and save the overlay image
     logger.info("Generating overlay image...")
