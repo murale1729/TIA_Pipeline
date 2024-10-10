@@ -153,8 +153,7 @@ else:
             save_dir=unique_output_dir,
             mode='tile',
             on_gpu=args.gpu,
-            crash_on_exception=False,
-            overwrite = True
+            crash_on_exception=False
         )
     except Exception as e:
         logger.exception(f"Segmentation failed for Tile: {e}")
