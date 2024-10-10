@@ -32,9 +32,8 @@ parser.add_argument('--batch_size', type=int, default=4, help='Batch size for pr
 args = parser.parse_args()
 
 # Ensure GPU availability
-if args.gpu and not torch.cuda.is_available():
-    logger.warning("GPU not available, switching to CPU.")
-    args.gpu = False
+if not args.gpu:
+    args.gpu = torch.cuda.is_available()
 logger.info(f"Using GPU for processing: {args.gpu}")
 
 logger.debug(f"Input arguments: {args}")
