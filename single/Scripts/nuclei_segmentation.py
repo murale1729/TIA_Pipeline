@@ -15,6 +15,9 @@ import numpy as np
 from scipy.spatial import distance
 import cv2
 import glob
+import datetime
+
+
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -139,10 +142,15 @@ else:
     logger.info("Applying tissue mask to the input image.")
     masked_img = cv2.bitwise_and(input_img, input_img, mask=tissue_mask_binary)
 
+    # Generate a unique timestamp
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    unique_output_dir = os.path.join(args.output_dir, f"nuclei_run_{timestamp}")
+    os.makedirs(unique_output_dir, exist_ok=True)
+    logger.info("Saving Nuclei results in {unique_output_dir}")
     try:
         output = segmentor.predict(
             imgs=[masked_img],
-            save_dir=args.output_dir,
+            save_dir=unique_output_dir,
             mode='tile',
             on_gpu=args.gpu,
             crash_on_exception=False
