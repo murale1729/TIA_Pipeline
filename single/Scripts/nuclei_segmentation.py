@@ -154,6 +154,7 @@ else:
             mode='tile',
             on_gpu=args.gpu,
             crash_on_exception=False
+            overwrite = True
         )
     except Exception as e:
         logger.exception(f"Segmentation failed for Tile: {e}")
