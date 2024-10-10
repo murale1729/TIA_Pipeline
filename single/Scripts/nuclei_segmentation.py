@@ -138,11 +138,18 @@ else:
     logger.info("Applying tissue mask to the input image.")
     masked_img = cv2.bitwise_and(input_img, input_img, mask=tissue_mask_binary)
 
+
+
     # Save masked_img to a temporary file
     temp_dir = tempfile.gettempdir()
     masked_img_path = os.path.join(temp_dir, f"masked_image_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
     cv2.imwrite(masked_img_path, masked_img)
     logger.info(f"Masked image saved at: {masked_img_path}")
+
+        # Save masked_img to a different location instead of /tmp
+    masked_img_path1 = os.path.join('/home/path02/python_envs/ImpartLabs/tmp/results', f"masked_image_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+    cv2.imwrite(masked_img_path1, masked_img)
+    logger.info(f"Masked image also saved at: {masked_img_path}")
 
     # Generate a unique output directory name but do not create it
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
