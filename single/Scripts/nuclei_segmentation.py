@@ -17,8 +17,6 @@ import cv2
 import glob
 import datetime
 
-
-
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
@@ -142,14 +140,19 @@ else:
     logger.info("Applying tissue mask to the input image.")
     masked_img = cv2.bitwise_and(input_img, input_img, mask=tissue_mask_binary)
 
-    # Generate a unique timestamp
+    # Save masked_img to a temporary file (this ensures we pass a file path to segmentor.predict)
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     unique_output_dir = os.path.join(args.output_dir, f"nuclei_run_{timestamp}")
-    #os.makedirs(unique_output_dir, exist_ok=True)
-    logger.info("Saving Nuclei results in {unique_output_dir}")
+    os.makedirs(unique_output_dir, exist_ok=True)  # Ensure the directory exists
+
+    masked_img_path = os.path.join(unique_output_dir, 'masked_image.png')
+    cv2.imwrite(masked_img_path, masked_img)
+    logger.info(f"Masked image saved at: {masked_img_path}")
+
+    logger.info(f"Saving Nuclei results in {unique_output_dir}")
     try:
         output = segmentor.predict(
-            imgs=[masked_img],
+            imgs=[masked_img_path],  # Pass the file path, not the ndarray
             save_dir=unique_output_dir,
             mode='tile',
             on_gpu=args.gpu,
