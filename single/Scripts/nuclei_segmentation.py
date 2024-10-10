@@ -168,21 +168,20 @@ logger.debug(f"Segmentation output: {output}")
 output_dir_for_image = unique_output_dir
 logger.info(f"Segmentation results saved in: {output_dir_for_image}")
 
-# Define the path to the instance map file
-# Find .dat files in the unique output directory
-dat_files = glob.glob(os.path.join(output_dir_for_image, '*.dat'))
-if not dat_files:
-    logger.error(f"No .dat files found in {output_dir_for_image}")
-    sys.exit(1)
-# Assuming there's only one .dat file per image
-inst_map_path = '0.dat'
+# Modify this part to explicitly load the `0.dat` file
+inst_map_path = os.path.join(output_dir_for_image, '0.dat')
 
-# Load the segmentation results
+# Check if '0.dat' exists
+if not os.path.exists(inst_map_path):
+    logger.error(f"File '0.dat' not found in {output_dir_for_image}")
+    sys.exit(1)
+
+# Load the segmentation results from '0.dat'
 logger.info(f"Loading segmentation results from {inst_map_path}")
 try:
-    nuclei_predictions = np.load(inst_map_path, allow_pickle=True).item()
+    nuclei_predictions = joblib.load(inst_map_path)
 except Exception as e:
-    logger.exception(f"Failed to load segmentation results: {e}")
+    logger.exception(f"Failed to load segmentation results from {inst_map_path}: {e}")
     sys.exit(1)
 
 logger.info(f"Number of detected nuclei: {len(nuclei_predictions)}")
