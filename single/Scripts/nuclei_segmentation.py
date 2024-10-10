@@ -153,7 +153,7 @@ else:
             save_dir=unique_output_dir,
             mode='tile',
             on_gpu=args.gpu,
-            crash_on_exception=False
+            crash_on_exception=False,
             overwrite = True
         )
     except Exception as e:
