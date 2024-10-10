@@ -178,9 +178,9 @@ def overlay_nuclei(input_img, nuclei_predictions, output_dir):
 
     return output_img_path
 
-def visualize_patches(nuclei_predictions, wsi, rng, num_examples=4):
+def visualize_patches(nuclei_predictions, wsi, rng, output_dir, num_examples=4):
     """
-    Visualize small patches around randomly selected nuclei and overlay the contours.
+    Visualize and save small patches around randomly selected nuclei with overlaid contours.
     """
     # Define the coloring dictionary
     color_dict = {
@@ -192,6 +192,10 @@ def visualize_patches(nuclei_predictions, wsi, rng, num_examples=4):
         5: ("non-neoplastic epithelial", (0, 0, 255)),
         6: ("Unknown Type", (128, 128, 128)),  # Gray for unknown types
     }
+
+    # Create a directory to save patches
+    patches_dir = os.path.join(output_dir, 'nuclei_patches')
+    os.makedirs(patches_dir, exist_ok=True)
 
     # Create a list of nucleus IDs to sample from
     nuc_id_list = list(nuclei_predictions.keys())
@@ -209,6 +213,18 @@ def visualize_patches(nuclei_predictions, wsi, rng, num_examples=4):
         nuc_patch = wsi.read_rect(cent - bb // 2, bb, resolution=0.25, units="mpp", coord_space="resolution")
         overlaid_patch = cv2.drawContours(nuc_patch.copy(), [contour], -1, (255, 255, 0), 2)
 
+        # Save the patches
+        nucleus_type = sample_nuc.get("type", 6)
+        type_name = color_dict[nucleus_type][0]
+        base_filename = f"nucleus_{selected_nuc_id}_type_{type_name}"
+        original_patch_path = os.path.join(patches_dir, f"{base_filename}_original.png")
+        overlaid_patch_path = os.path.join(patches_dir, f"{base_filename}_overlay.png")
+        cv2.imwrite(original_patch_path, cv2.cvtColor(nuc_patch, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(overlaid_patch_path, cv2.cvtColor(overlaid_patch, cv2.COLOR_RGB2BGR))
+
+        logger.info(f"Saved original patch: {original_patch_path}")
+        logger.info(f"Saved overlaid patch: {overlaid_patch_path}")
+
         # Plot the results
         plt.subplot(2, num_examples, i + 1)
         plt.imshow(nuc_patch)
@@ -217,9 +233,13 @@ def visualize_patches(nuclei_predictions, wsi, rng, num_examples=4):
         plt.subplot(2, num_examples, i + num_examples + 1)
         plt.imshow(overlaid_patch)
         plt.axis("off")
-        plt.title(color_dict[sample_nuc["type"]][0])
+        plt.title(type_name)
     
     plt.tight_layout()
+    # Save the figure with patches
+    patches_figure_path = os.path.join(output_dir, 'nuclei_patches.png')
+    plt.savefig(patches_figure_path)
+    logger.info(f"Saved patches figure: {patches_figure_path}")
     plt.show()
 
 def generate_report_with_overlay(output_dir, input_img_path, mpp_value, output_json, wsi_file_name=None):
@@ -257,11 +277,11 @@ def generate_report_with_overlay(output_dir, input_img_path, mpp_value, output_j
 
     logger.info(f"Metrics report saved to {output_json}")
 
-    # Optionally, display patches around selected nuclei
+    # Optionally, display and save patches around selected nuclei
     if wsi_file_name:
         rng = np.random.default_rng()  # random number generator for selecting nuclei
         wsi = WSIReader.open(wsi_file_name)
-        visualize_patches(nuclei_predictions, wsi, rng)
+        visualize_patches(nuclei_predictions, wsi, rng, output_dir)
 
 if __name__ == "__main__":
     # Parsing input arguments
