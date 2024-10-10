@@ -175,7 +175,7 @@ if not dat_files:
     logger.error(f"No .dat files found in {output_dir_for_image}")
     sys.exit(1)
 # Assuming there's only one .dat file per image
-inst_map_path = dat_files[0]
+inst_map_path = '0.dat'
 
 # Load the segmentation results
 logger.info(f"Loading segmentation results from {inst_map_path}")
