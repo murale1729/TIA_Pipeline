@@ -145,7 +145,7 @@ else:
     # Generate a unique timestamp
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     unique_output_dir = os.path.join(args.output_dir, f"nuclei_run_{timestamp}")
-    os.makedirs(unique_output_dir, exist_ok=True)
+    #os.makedirs(unique_output_dir, exist_ok=True)
     logger.info("Saving Nuclei results in {unique_output_dir}")
     try:
         output = segmentor.predict(
