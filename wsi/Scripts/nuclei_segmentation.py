@@ -31,7 +31,7 @@ logger.info(f"Using GPU for processing: {args.gpu}")
 
 logger.debug(f"Input arguments: {args}")
 
-# Load metadata
+# Load metadata if provided
 if args.metadata:
     logger.info(f"Loading metadata from {args.metadata}")
     metadata = joblib.load(args.metadata)
@@ -69,12 +69,19 @@ if args.mode == "wsi":
         # Load WSI with WSIReader
         wsi_reader = WSIReader.open(args.input)
         
+        if wsi_reader is None:
+            raise ValueError(f"Failed to load WSI: {args.input}")
+        
         # Segment the WSI at a specific resolution (use mpp_value)
+        resolution = {"mpp": (mpp_value, mpp_value)}
+        logger.info(f"Using resolution: {resolution} for WSI segmentation.")
+        
+        # Perform segmentation on the WSI
         output = segmentor.predict(
             imgs=[wsi_reader],
             save_dir=args.output_dir,
             mode='wsi',
-            resolution={"mpp": (mpp_value, mpp_value)},
+            resolution=resolution,
             on_gpu=args.gpu,
             crash_on_exception=False
         )
@@ -209,4 +216,3 @@ with open(metrics_output_path, 'w') as f:
     json.dump(metrics, f, indent=4)
 
 logger.info(f"Segmentation metrics saved to {metrics_output_path}")
-
