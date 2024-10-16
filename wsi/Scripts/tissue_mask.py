@@ -44,7 +44,9 @@ if args.input.lower().endswith(('.svs', '.tiff', '.ndpi', '.vms')):
     
     # Generate tissue mask at the specified resolution and units
     mask = wsi.tissue_mask(resolution=args.resolution, units=args.units)
-    mask_thumb = mask  # Use the mask directly
+    
+    # Convert the tissue mask to a NumPy array
+    mask_thumb = np.array(mask)
 
 elif args.input.lower().endswith(('.png', '.jpg', '.jpeg')):
     # Handle regular images using OpenCV
@@ -61,11 +63,6 @@ elif args.input.lower().endswith(('.png', '.jpg', '.jpeg')):
 
 else:
     raise ValueError(f"Unsupported file format: {args.input}")
-
-# Ensure the mask is writable if needed (in case it's read-only)
-if not mask_thumb.flags.writeable:
-    mask_thumb = np.copy(mask_thumb)
-    mask_thumb.flags.writeable = True
 
 # Convert the mask to a PIL Image and save as PNG
 mask_image_pil = Image.fromarray(mask_thumb.astype(np.uint8))
@@ -84,7 +81,6 @@ plt.axis("off")
 # Save the visualization
 visualization_path = os.path.join(output_dir, f"{input_filename}_mask_visualization.png")
 plt.savefig(visualization_path)
-# plt.show()  # Comment out if running in non-interactive environments
 
 print(f"Tissue mask saved to: {mask_path}")
 print(f"Mask visualization saved to: {visualization_path}")
