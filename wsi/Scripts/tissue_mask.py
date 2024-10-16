@@ -43,10 +43,10 @@ if args.input.lower().endswith(('.svs', '.tiff', '.ndpi', '.vms')):
         mpp = (args.mpp, args.mpp)
     
     # Generate tissue mask at the specified resolution and units
-    mask = wsi.tissue_mask(resolution=args.resolution, units=args.units)
+    tissue_mask = wsi.tissue_mask(resolution=args.resolution, units=args.units)
     
-    # Convert the tissue mask to a NumPy array
-    mask_thumb = np.array(mask)
+    # Extract the image data from the tissue mask
+    mask_thumb = np.array(tissue_mask.slide_thumbnail(resolution=args.resolution))
 
 elif args.input.lower().endswith(('.png', '.jpg', '.jpeg')):
     # Handle regular images using OpenCV
