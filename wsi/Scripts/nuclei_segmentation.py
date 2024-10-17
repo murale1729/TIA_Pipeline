@@ -9,6 +9,7 @@ from scipy.spatial import distance
 from skimage.measure import regionprops
 from tiatoolbox.models.engine.nucleus_instance_segmentor import NucleusInstanceSegmentor
 from tiatoolbox.models.engine.semantic_segmentor import IOSegmentorConfig
+from tiatoolbox.wsicore.wsireader import WSIReader
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -17,38 +18,27 @@ logger = logging.getLogger(__name__)
 parser = argparse.ArgumentParser(description="Nuclei Segmentation using HoVerNet")
 parser.add_argument('--input', type=str, help='Path to normalized image or WSI', required=True)
 parser.add_argument('--output_dir', type=str, help='Directory to save output results', required=True)
-parser.add_argument('--metadata', type=str, help='Path to metadata.pkl file', required=False)
 parser.add_argument('--mode', type=str, default="tile", choices=["wsi", "tile"], help='Processing mode: "wsi" or "tile"')
 parser.add_argument('--gpu', action='store_true', help='Use GPU for processing')
 parser.add_argument('--default_mpp', type=float, help="Default MPP if not found in metadata", default=0.5)
 args = parser.parse_args()
 
+# Check for GPU usage
 if not args.gpu:
     args.gpu = torch.cuda.is_available()
 logger.info(f"Using GPU for processing: {args.gpu}")
 
 logger.debug(f"Input arguments: {args}")
 
-# Load metadata if provided
-if args.metadata:
-    logger.info(f"Loading metadata from {args.metadata}")
-    metadata = joblib.load(args.metadata)
-else:
-    metadata = {}
-    logger.warning("No metadata provided, using default MPP.")
+# Load the WSI and extract metadata from the input SVS file
+wsi_reader = WSIReader.open(args.input)
 
+# Extract metadata from the SVS file
+metadata = wsi_reader.info.as_dict()
+
+# Use MPP from metadata if available, otherwise fall back to the default MPP
 mpp = metadata.get('mpp', args.default_mpp)
-
-# Ensure MPP is valid and calculate a single MPP value
-if isinstance(mpp, tuple) and len(mpp) == 2:
-    mpp_value = sum(mpp) / len(mpp)
-elif isinstance(mpp, (int, float)):
-    mpp_value = float(mpp)
-else:
-    mpp_value = args.default_mpp
-    logger.warning(f"Invalid MPP in metadata, using default MPP: {mpp_value}")
-
-logger.info(f"Microns per pixel (MPP) used: {mpp_value}")
+logger.info(f"Microns per pixel (MPP) used: {mpp}")
 
 # Initialize NucleusInstanceSegmentor
 logger.info("Initializing NucleusInstanceSegmentor")
@@ -75,9 +65,9 @@ if args.mode == "wsi":
 
         # Create an IOConfig object for WSI processing
         ioconfig = IOSegmentorConfig(
-            input_resolutions=[{"mpp": mpp_value}],
-            output_resolutions=[{"mpp": mpp_value}],
-            save_resolution={"mpp": mpp_value},
+            input_resolutions=[{"mpp": mpp}],
+            output_resolutions=[{"mpp": mpp}],
+            save_resolution={"mpp": mpp},
             patch_input_shape=patch_input_shape,
             patch_output_shape=patch_output_shape
         )
@@ -171,7 +161,6 @@ def calculate_metrics(inst_map):
         nearest_neighbor_distances.append(nearest_distance)
 
         # Nucleus type classification (if available)
-        # Here, 'type_map' may be needed from the segmentation results
         nucleus_type = 0  # Default to 'other' if type is not available
         # Adjust based on your data; this is a placeholder
 
