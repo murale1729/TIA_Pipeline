@@ -1,20 +1,21 @@
 import argparse
 import os
 import joblib
+import matplotlib.pyplot as plt
+from tiatoolbox.models.engine.nucleus_instance_segmentor import NucleusInstanceSegmentor
+from tiatoolbox.utils.visualization import overlay_prediction_contours
+from tiatoolbox.wsicore.wsireader import WSIReader
 import logging
 import torch
 import json
 import numpy as np
 from scipy.spatial import distance
-from tiatoolbox.models.engine.nucleus_instance_segmentor import NucleusInstanceSegmentor
-from tiatoolbox.models.engine.semantic_segmentor import IOSegmentorConfig
-from tiatoolbox.wsicore.wsireader import WSIReader
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Parsing input arguments
-parser = argparse.ArgumentParser(description="Nuclei Segmentation using HoVerNet with optimized GPU utilization")
+parser = argparse.ArgumentParser(description="Nuclei Segmentation using HoVerNet")
 parser.add_argument('--input', type=str, help='Path to normalized image or WSI', required=True)
 parser.add_argument('--output_dir', type=str, help='Directory to save output results', required=True)
 parser.add_argument('--mode', type=str, default="wsi", choices=["wsi", "tile"], help='Processing mode: "wsi" or "tile"')
@@ -22,12 +23,10 @@ parser.add_argument('--gpu', action='store_true', help='Use GPU for processing')
 parser.add_argument('--default_mpp', type=float, help="Default MPP if not found in metadata", default=0.5)
 args = parser.parse_args()
 
-# Check for GPU usage
+# GPU availability check
 if not args.gpu:
     args.gpu = torch.cuda.is_available()
-
-device = torch.device("cuda" if args.gpu else "cpu")
-logger.info(f"Using device: {device}")
+logger.info(f"Using GPU for processing: {args.gpu}")
 
 logger.debug(f"Input arguments: {args}")
 
@@ -54,46 +53,34 @@ logger.info(f"Microns per pixel (MPP) used: {mpp_value}")
 logger.info("Initializing NucleusInstanceSegmentor")
 segmentor = NucleusInstanceSegmentor(
     pretrained_model="hovernet_fast-pannuke",
-    num_loader_workers=8,  # Increased number of data loader workers
-    num_postproc_workers=8,  # Increased number of post-processing workers
-    batch_size=32,  # Increased batch size
+    num_loader_workers=8,   # Increased number of data loader workers
+    num_postproc_workers=8, # Increased number of post-processing workers
+    batch_size=32,          # Increased batch size
     auto_generate_mask=False
 )
 
-# Ensure that the model is moved to the GPU
-segmentor.model.to(device)
+# Ensure that the model is moved to the GPU if requested
+if args.gpu:
+    device = torch.device("cuda")
+    segmentor.model.to(device)
+else:
+    device = torch.device("cpu")
+    segmentor.model.to(device)
 
 # Process depending on the mode (wsi or tile)
 if args.mode == "wsi":
     logger.info(f"Running segmentation on WSI: {args.input}")
     try:
-        # Define the patch shapes (adjusted to larger sizes)
-        patch_input_shape = [540, 540]   # Larger input patch size
-        patch_output_shape = [160, 160]  # Corresponding output patch size
-
-        # Define stride shape (similar to patch output size)
-        stride_shape = [160, 160]
-
-        # Define margin
-        margin = [int((in_size - out_size) / 2) for in_size, out_size in zip(patch_input_shape, patch_output_shape)]
-
-        # Create an IOConfig object for WSI processing with 'units' specified
-        ioconfig = IOSegmentorConfig(
-            input_resolutions=[{"units": "mpp", "resolution": mpp_value}],
-            output_resolutions=[{"units": "mpp", "resolution": mpp_value}],
-            save_resolution={"units": "mpp", "resolution": mpp_value},
-            patch_input_shape=patch_input_shape,
-            patch_output_shape=patch_output_shape,
-            stride_shape=stride_shape,
-            margin=margin  # Set margin
-        )
+        # Define the resolution using MPP
+        resolution = {"mpp": mpp_value}
+        logger.info(f"Using resolution: {resolution} for WSI segmentation.")
 
         # Run the segmentation
         output = segmentor.predict(
             imgs=[args.input],
             save_dir=args.output_dir,
             mode='wsi',
-            ioconfig=ioconfig,
+            resolution=resolution,
             on_gpu=args.gpu,
             crash_on_exception=False
         )
@@ -119,39 +106,44 @@ else:
 logger.debug(f"Segmentation output: {output}")
 
 # Get the correct path to the output file
-image_basename = os.path.splitext(os.path.basename(args.input))[0]
-output_dir_for_image = os.path.join(args.output_dir, image_basename)
+output_dir_for_image = args.output_dir
 logger.info(f"Segmentation results saved in: {output_dir_for_image}")
 
-# Check if the output directory exists
-if not os.path.exists(output_dir_for_image):
-    logger.error(f"Output directory not found: {output_dir_for_image}")
+# Check if the output directory contains segmentation results
+seg_result_files = os.listdir(output_dir_for_image)
+if not seg_result_files:
+    logger.error(f"No segmentation result files found in {output_dir_for_image}")
     exit(1)
 
-# Find the instance map file (e.g., 'inst_map.dat')
-inst_map_path = os.path.join(output_dir_for_image, 'inst_map.dat')
+# Find the instance map file (usually named '0.dat' or 'inst_map.dat')
+inst_map_path = os.path.join(output_dir_for_image, '0.dat')
 if not os.path.exists(inst_map_path):
-    logger.error(f"No instance map file found in {output_dir_for_image}")
-    exit(1)
+    # Try alternative filename
+    inst_map_path = os.path.join(output_dir_for_image, 'inst_map.dat')
+    if not os.path.exists(inst_map_path):
+        logger.error(f"Segmentation result file not found: {inst_map_path}")
+        exit(1)
 
 # Load the segmentation results
 try:
     logger.info(f"Loading segmentation results from {inst_map_path}")
-    inst_map = joblib.load(inst_map_path)
-    logger.info(f"Instance map loaded with shape: {inst_map.shape}")
+    nuclei_predictions = joblib.load(inst_map_path)
+    logger.info(f"Number of detected nuclei: {len(nuclei_predictions)}")
+except FileNotFoundError:
+    logger.error(f"Segmentation result file not found: {inst_map_path}")
+    exit(1)
 except Exception as e:
     logger.error(f"Failed to load segmentation results: {e}")
     exit(1)
 
 # Calculate metrics
-def calculate_metrics(inst_map):
-    from skimage.measure import regionprops
-
-    props = regionprops(inst_map)
+def calculate_metrics(nuclei_predictions):
     total_area = 0
     total_aspect_ratio = 0
-    total_nuclei = len(props)
+    total_nuclei = len(nuclei_predictions)
+    total_probability = 0
     nearest_neighbor_distances = []
+    nuclei_with_overlaps = 0
 
     type_distribution = {
         'neoplastic_epithelial': 0,
@@ -161,27 +153,59 @@ def calculate_metrics(inst_map):
         'other': 0
     }
 
-    centroids = [prop.centroid for prop in props]
+    confidences = []
+    centroids = []
 
-    for prop in props:
-        area = prop.area
-        total_area += area
+    # Gather centroids for nearest neighbor calculation
+    for _, nucleus in nuclei_predictions.items():
+        centroid = nucleus.get('centroid')
+        if centroid is not None:
+            centroids.append(np.array(centroid))
 
-        # Calculate aspect ratio
-        minr, minc, maxr, maxc = prop.bbox
-        width = maxc - minc
-        height = maxr - minr
-        aspect_ratio = width / height if height != 0 else 0
+    # Calculate metrics for each nucleus
+    for _, nucleus in nuclei_predictions.items():
+        box = nucleus.get('box')
+        centroid = nucleus.get('centroid')
+        if box is None or centroid is None:
+            continue  # Skip if essential data is missing
+
+        width = box[2] - box[0]
+        height = box[3] - box[1]
+        if height == 0:
+            aspect_ratio = 0
+        else:
+            aspect_ratio = width / height
         total_aspect_ratio += aspect_ratio
 
+        box_area = width * height
+        total_area += box_area
+
+        # Confidence score
+        confidences.append(nucleus.get('prob', 0))
+
+        # Check for overlaps
+        # Note: Overlaps are complex to compute accurately; this is a simplified version
+        # For a more accurate calculation, consider using spatial data structures
+        for _, other_nucleus in nuclei_predictions.items():
+            if nucleus == other_nucleus:
+                continue  # Skip comparison with itself
+            other_box = other_nucleus.get('box')
+            if other_box is None:
+                continue
+            # Check for box overlap
+            if (box[0] < other_box[2] and box[2] > other_box[0] and
+                box[1] < other_box[3] and box[3] > other_box[1]):
+                nuclei_with_overlaps += 1
+                break  # Count overlap only once per nucleus
+
         # Nearest neighbor distance
-        distances = distance.cdist([prop.centroid], centroids, 'euclidean')
+        distances = distance.cdist([centroid], centroids, 'euclidean')
         if len(distances.flatten()) > 1:
             nearest_distance = np.partition(distances.flatten(), 1)[1]  # Skip distance to itself
             nearest_neighbor_distances.append(nearest_distance)
 
-        # Nucleus type classification (if available)
-        nucleus_type = prop.label  # Adjust based on your data
+        # Nucleus type classification
+        nucleus_type = nucleus.get('type', None)
         if nucleus_type == 1:
             type_distribution['neoplastic_epithelial'] += 1
         elif nucleus_type == 2:
@@ -195,6 +219,7 @@ def calculate_metrics(inst_map):
 
     avg_area = total_area / total_nuclei if total_nuclei > 0 else 0
     avg_aspect_ratio = total_aspect_ratio / total_nuclei if total_nuclei > 0 else 0
+    avg_probability = np.mean(confidences) if confidences else 0
     avg_nearest_neighbor_distance = np.mean(nearest_neighbor_distances) if nearest_neighbor_distances else 0
 
     # Assuming a given area of the tile (in mm²), calculate density
@@ -207,14 +232,19 @@ def calculate_metrics(inst_map):
         'nucleus_type_distribution': type_distribution,
         'average_nucleus_area': avg_area,
         'average_aspect_ratio': avg_aspect_ratio,
-        'average_nearest_neighbor_distance': avg_nearest_neighbor_distance,
-        'nuclei_density': nuclei_density
+        'nearest_neighbor_distance': avg_nearest_neighbor_distance,
+        'nuclei_density': nuclei_density,
+        'confidence_score_distribution': {
+            'average_confidence': avg_probability,
+            'low_confidence_count': len([c for c in confidences if c < 0.5])
+        },
+        'nuclei_with_overlaps': nuclei_with_overlaps
     }
 
     return metrics
 
 # Calculate the metrics and save to a JSON file
-metrics = calculate_metrics(inst_map)
+metrics = calculate_metrics(nuclei_predictions)
 metrics_output_path = os.path.join(output_dir_for_image, 'segmentation_metrics.json')
 with open(metrics_output_path, 'w') as f:
     json.dump(metrics, f, indent=4)
