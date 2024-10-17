@@ -53,9 +53,9 @@ logger.info(f"Microns per pixel (MPP) used: {mpp_value}")
 logger.info("Initializing NucleusInstanceSegmentor")
 segmentor = NucleusInstanceSegmentor(
     pretrained_model="hovernet_fast-pannuke",
-    num_loader_workers=8,   # Increased number of data loader workers
-    num_postproc_workers=8, # Increased number of post-processing workers
-    batch_size=32,          # Increased batch size
+    num_loader_workers= 16,   # Increased number of data loader workers
+    num_postproc_workers= 16, # Increased number of post-processing workers
+    batch_size= 64,          # Increased batch size
     auto_generate_mask=False
 )
 
