@@ -71,13 +71,17 @@ if args.mode == "wsi":
         patch_input_shape = [540, 540]   # Larger input patch size
         patch_output_shape = [160, 160]  # Corresponding output patch size
 
+        # Define stride shape (similar to patch output size)
+        stride_shape = [160, 160]
+
         # Create an IOConfig object for WSI processing with 'units' specified
         ioconfig = IOSegmentorConfig(
             input_resolutions=[{"units": "mpp", "resolution": mpp_value}],
             output_resolutions=[{"units": "mpp", "resolution": mpp_value}],
             save_resolution={"units": "mpp", "resolution": mpp_value},
             patch_input_shape=patch_input_shape,
-            patch_output_shape=patch_output_shape
+            patch_output_shape=patch_output_shape,
+            stride_shape=stride_shape  # Set stride shape
         )
 
         # Run the segmentation
