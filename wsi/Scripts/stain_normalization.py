@@ -27,12 +27,19 @@ wsi_reader = WSIReader.open(args.input)
 metadata = wsi_reader.info.as_dict()  # Save metadata to reapply later
 
 # Extract full-resolution WSI or appropriate resolution based on requirements
-slide_image = wsi_reader.read_region(location=(0, 0), level=0, size=wsi_reader.slide_dimensions(resolution= 1.0, units="mpp")[0]) # Changed from .5 to 2.0
+logger.info("Extracting slide image at the selected resolution...")
+level = 0  # Select the highest resolution (level 0)
+slide_image = wsi_reader.read_region(location=(0, 0), level=level, size=wsi_reader.slide_dimensions(level=level))
 
-# Create a writable copy of the image
-slide_image_writable = np.array(slide_image)  # Convert to NumPy array
+# Convert to NumPy array
+slide_image_writable = np.array(slide_image)
+
+# Ensure that the array is writable
 if not slide_image_writable.flags.writeable:
-    slide_image_writable = np.copy(slide_image_writable)  # Ensure writable
+    slide_image_writable = np.copy(slide_image_writable)  # Ensure it's writable
+
+# Log the dimensions of the input image
+logger.info(f"Slide image dimensions (H x W x C): {slide_image_writable.shape}")
 
 # Load or set the reference image
 if args.reference:
@@ -55,31 +62,37 @@ else:
     raise ValueError(f"Unsupported stain normalization method: {args.method}")
 
 # Fit the normalizer to the reference image
+logger.info("Fitting the stain normalizer to the reference image...")
 stain_normalizer.fit(reference_image)
 
 # Perform stain normalization on the slide image
+logger.info("Applying stain normalization to the slide image...")
 normalized_image = stain_normalizer.transform(slide_image_writable)
 
 # Ensure the output directory exists
 output_path = Path(args.output)
-logger.info(f"output_path {output_path}")
 output_dir = output_path.parent
 output_dir.mkdir(parents=True, exist_ok=True)
 
-# Convert to RGB format if necessary (to ensure compatibility with PNG format)
-if normalized_image.shape[-1] == 4:  # RGBA to RGB if needed
+# Check if normalized image has 4 channels (RGBA) and convert to RGB
+if normalized_image.shape[-1] == 4:  # If RGBA, remove the alpha channel
+    logger.info("Converting RGBA to RGB for PNG compatibility...")
     normalized_image = normalized_image[:, :, :3]
 
-# Convert normalized_image (NumPy array) to PIL Image for saving as PNG
-normalized_image_pil = Image.fromarray((normalized_image * 255).astype(np.uint8))
+# Normalize the image values to [0, 255] for saving as PNG
+normalized_image = (normalized_image * 255).clip(0, 255).astype(np.uint8)
+
+# Convert NumPy array to PIL Image for saving as PNG
+normalized_image_pil = Image.fromarray(normalized_image)
 
 # Save the normalized image as PNG
 png_output_path = output_path.with_suffix('.png')
+logger.info(f"Saving the normalized image to {png_output_path}...")
 normalized_image_pil.save(png_output_path)
 
 # Store the metadata for later use (e.g., segmentation)
 metadata_path = output_dir / 'metadata.pkl'
-logger.info(f"Output Directory Path {output_dir}")
+logger.info(f"Saving metadata to {metadata_path}...")
 with open(metadata_path, 'wb') as f:
     pickle.dump(metadata, f)
 
