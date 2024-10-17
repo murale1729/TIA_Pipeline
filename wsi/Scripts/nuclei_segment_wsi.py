@@ -74,6 +74,9 @@ if args.mode == "wsi":
         # Define stride shape (similar to patch output size)
         stride_shape = [160, 160]
 
+        # Define margin
+        margin = [int((in_size - out_size) / 2) for in_size, out_size in zip(patch_input_shape, patch_output_shape)]
+
         # Create an IOConfig object for WSI processing with 'units' specified
         ioconfig = IOSegmentorConfig(
             input_resolutions=[{"units": "mpp", "resolution": mpp_value}],
@@ -81,7 +84,8 @@ if args.mode == "wsi":
             save_resolution={"units": "mpp", "resolution": mpp_value},
             patch_input_shape=patch_input_shape,
             patch_output_shape=patch_output_shape,
-            stride_shape=stride_shape  # Set stride shape
+            stride_shape=stride_shape,
+            margin=margin  # Set margin
         )
 
         # Run the segmentation
