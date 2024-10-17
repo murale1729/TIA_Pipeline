@@ -1,252 +1,150 @@
 import argparse
 import os
-import joblib
-import matplotlib.pyplot as plt
-from tiatoolbox.models.engine.nucleus_instance_segmentor import NucleusInstanceSegmentor
-from tiatoolbox.utils.visualization import overlay_prediction_contours
-from tiatoolbox.wsicore.wsireader import WSIReader
 import logging
 import torch
 import json
 import numpy as np
-from scipy.spatial import distance
+from math import ceil
+from tiatoolbox.models.engine.nucleus_instance_segmentor import NucleusInstanceSegmentor
+from tiatoolbox.wsicore.wsireader import WSIReader
+import time
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Parsing input arguments
-parser = argparse.ArgumentParser(description="Nuclei Segmentation using HoVerNet")
+parser = argparse.ArgumentParser(description="Nuclei Segmentation with Progress Tracking and Resume Capability")
 parser.add_argument('--input', type=str, help='Path to normalized image or WSI', required=True)
 parser.add_argument('--output_dir', type=str, help='Directory to save output results', required=True)
-parser.add_argument('--mode', type=str, default="wsi", choices=["wsi", "tile"], help='Processing mode: "wsi" or "tile"')
 parser.add_argument('--gpu', action='store_true', help='Use GPU for processing')
 parser.add_argument('--default_mpp', type=float, help="Default MPP if not found in metadata", default=0.5)
 args = parser.parse_args()
 
-# GPU availability check
+# Check for GPU usage
 if not args.gpu:
     args.gpu = torch.cuda.is_available()
-logger.info(f"Using GPU for processing: {args.gpu}")
 
-logger.debug(f"Input arguments: {args}")
+device = torch.device("cuda" if args.gpu else "cpu")
+logger.info(f"Using device: {device}")
 
-# Load the WSI and extract metadata directly from the SVS file
+# Load the WSI and extract metadata
 wsi_reader = WSIReader.open(args.input)
 metadata = wsi_reader.info.as_dict()
 logger.info(f"WSI Metadata: {metadata}")
 
-# Extract MPP (Microns Per Pixel) from the metadata
+# Extract MPP
 mpp = metadata.get('mpp', None)
-
-# Ensure MPP is valid and calculate a single MPP value
 if isinstance(mpp, (tuple, list)) and len(mpp) == 2:
     mpp_value = sum(mpp) / len(mpp)
 elif isinstance(mpp, (int, float)):
     mpp_value = float(mpp)
 else:
     mpp_value = args.default_mpp
-    logger.warning(f"MPP not found in metadata or invalid format, using default MPP: {mpp_value}")
+    logger.warning(f"MPP not found, using default MPP: {mpp_value}")
 
 logger.info(f"Microns per pixel (MPP) used: {mpp_value}")
 
-# Initialize NucleusInstanceSegmentor with increased batch size and worker counts
+# Initialize NucleusInstanceSegmentor
 logger.info("Initializing NucleusInstanceSegmentor")
 segmentor = NucleusInstanceSegmentor(
     pretrained_model="hovernet_fast-pannuke",
-    num_loader_workers= 16,   # Increased number of data loader workers
-    num_postproc_workers= 16, # Increased number of post-processing workers
-    batch_size= 64,          # Increased batch size
+    num_loader_workers=32,   # Adjust based on your system
+    num_postproc_workers=16, # Adjust based on your system
+    batch_size=64,           # Adjust based on your GPU memory
     auto_generate_mask=False
 )
+segmentor.model.to(device)
 
-# Ensure that the model is moved to the GPU if requested
-if args.gpu:
-    device = torch.device("cuda")
-    segmentor.model.to(device)
-else:
-    device = torch.device("cpu")
-    segmentor.model.to(device)
+# Define tile parameters
+tile_size = [5000, 5000]  # Adjust as needed
+tile_overlap = [250, 250]  # Adjust as needed
+stride = [tile_size[0] - tile_overlap[0], tile_size[1] - tile_overlap[1]]
 
-# Process depending on the mode (wsi or tile)
-if args.mode == "wsi":
-    logger.info(f"Running segmentation on WSI: {args.input}")
+# Calculate total tiles
+wsi_dimensions = wsi_reader.slide_dimensions
+total_tiles = calculate_total_tiles(wsi_dimensions, tile_size, stride)
+logger.info(f"Total tiles to process: {total_tiles}")
+
+# Load processed tiles log
+processed_tiles_log = os.path.join(args.output_dir, 'processed_tiles.log')
+
+def log_processed_tile(tile_index):
+    with open(processed_tiles_log, 'a') as f:
+        f.write(f"{tile_index}\n")
+
+def load_processed_tiles():
+    if os.path.exists(processed_tiles_log):
+        with open(processed_tiles_log, 'r') as f:
+            processed_tiles = set(int(line.strip()) for line in f)
+    else:
+        processed_tiles = set()
+    return processed_tiles
+
+processed_tiles = load_processed_tiles()
+
+# Generate tile coordinates
+from tiatoolbox.utils.misc import get_tile_coords
+
+tile_coords = get_tile_coords(
+    wsi_dimensions,
+    tile_size=tile_size,
+    stride=stride
+)
+
+# Start processing
+start_time = time.time()
+for idx, coords in enumerate(tile_coords):
+    if idx in processed_tiles:
+        logger.info(f"Skipping tile {idx}, already processed.")
+        continue
+
+    logger.info(f"Processing tile {idx+1}/{total_tiles}")
+
+    # Extract tile region
+    x, y, w, h = coords
+    tile_image = wsi_reader.read_region((x, y), level=0, size=(w, h))
+
+    # Save tile image temporarily
+    tile_image_path = os.path.join(args.output_dir, f"tile_{idx}.png")
+    tile_image.save(tile_image_path)
+
+    # Process tile
     try:
-        # Define the resolution using MPP
-        resolution = {"mpp": mpp_value}
-        logger.info(f"Using resolution: {resolution} for WSI segmentation.")
-
-        # Run the segmentation
+        batch_start_time = time.time()
         output = segmentor.predict(
-            imgs=[args.input],
-            save_dir=args.output_dir,
-            mode='wsi',
-            resolution=resolution,
-            on_gpu=args.gpu,
-            crash_on_exception=False
-        )
-
-    except Exception as e:
-        logger.error(f"Segmentation failed for WSI: {e}")
-        exit(1)
-else:
-    # Tile mode
-    logger.info(f"Running segmentation on Tile: {args.input}")
-    try:
-        output = segmentor.predict(
-            imgs=[args.input],
+            imgs=[tile_image_path],
             save_dir=args.output_dir,
             mode='tile',
             on_gpu=args.gpu,
             crash_on_exception=False
         )
+        batch_end_time = time.time()
+        batch_time = batch_end_time - batch_start_time
+        logger.info(f"Time taken for tile {idx+1}: {batch_time:.2f} seconds")
+
+        # Log processed tile
+        log_processed_tile(idx)
+        processed_tiles.add(idx)
+
+        # Remove temporary tile image
+        os.remove(tile_image_path)
+
+        # Estimate progress
+        processed_count = len(processed_tiles)
+        progress = (processed_count / total_tiles) * 100
+        elapsed_time = time.time() - start_time
+        estimated_total_time = (elapsed_time / processed_count) * total_tiles
+        remaining_time = estimated_total_time - elapsed_time
+        formatted_remaining_time = format_time(remaining_time)
+        logger.info(f"Progress: {progress:.2f}% | Estimated remaining time: {formatted_remaining_time}")
+
     except Exception as e:
-        logger.error(f"Segmentation failed for Tile: {e}")
-        exit(1)
+        logger.error(f"Error processing tile {idx+1}: {e}")
+        # Handle exception as needed
+        continue
 
-logger.debug(f"Segmentation output: {output}")
-
-# Get the correct path to the output file
-output_dir_for_image = args.output_dir
-logger.info(f"Segmentation results saved in: {output_dir_for_image}")
-
-# Check if the output directory contains segmentation results
-seg_result_files = os.listdir(output_dir_for_image)
-if not seg_result_files:
-    logger.error(f"No segmentation result files found in {output_dir_for_image}")
-    exit(1)
-
-# Find the instance map file (usually named '0.dat' or 'inst_map.dat')
-inst_map_path = os.path.join(output_dir_for_image, '0.dat')
-if not os.path.exists(inst_map_path):
-    # Try alternative filename
-    inst_map_path = os.path.join(output_dir_for_image, 'inst_map.dat')
-    if not os.path.exists(inst_map_path):
-        logger.error(f"Segmentation result file not found: {inst_map_path}")
-        exit(1)
-
-# Load the segmentation results
-try:
-    logger.info(f"Loading segmentation results from {inst_map_path}")
-    nuclei_predictions = joblib.load(inst_map_path)
-    logger.info(f"Number of detected nuclei: {len(nuclei_predictions)}")
-except FileNotFoundError:
-    logger.error(f"Segmentation result file not found: {inst_map_path}")
-    exit(1)
-except Exception as e:
-    logger.error(f"Failed to load segmentation results: {e}")
-    exit(1)
-
-# Calculate metrics
-def calculate_metrics(nuclei_predictions):
-    total_area = 0
-    total_aspect_ratio = 0
-    total_nuclei = len(nuclei_predictions)
-    total_probability = 0
-    nearest_neighbor_distances = []
-    nuclei_with_overlaps = 0
-
-    type_distribution = {
-        'neoplastic_epithelial': 0,
-        'inflammatory': 0,
-        'connective': 0,
-        'dead_cells': 0,
-        'other': 0
-    }
-
-    confidences = []
-    centroids = []
-
-    # Gather centroids for nearest neighbor calculation
-    for _, nucleus in nuclei_predictions.items():
-        centroid = nucleus.get('centroid')
-        if centroid is not None:
-            centroids.append(np.array(centroid))
-
-    # Calculate metrics for each nucleus
-    for _, nucleus in nuclei_predictions.items():
-        box = nucleus.get('box')
-        centroid = nucleus.get('centroid')
-        if box is None or centroid is None:
-            continue  # Skip if essential data is missing
-
-        width = box[2] - box[0]
-        height = box[3] - box[1]
-        if height == 0:
-            aspect_ratio = 0
-        else:
-            aspect_ratio = width / height
-        total_aspect_ratio += aspect_ratio
-
-        box_area = width * height
-        total_area += box_area
-
-        # Confidence score
-        confidences.append(nucleus.get('prob', 0))
-
-        # Check for overlaps
-        # Note: Overlaps are complex to compute accurately; this is a simplified version
-        # For a more accurate calculation, consider using spatial data structures
-        for _, other_nucleus in nuclei_predictions.items():
-            if nucleus == other_nucleus:
-                continue  # Skip comparison with itself
-            other_box = other_nucleus.get('box')
-            if other_box is None:
-                continue
-            # Check for box overlap
-            if (box[0] < other_box[2] and box[2] > other_box[0] and
-                box[1] < other_box[3] and box[3] > other_box[1]):
-                nuclei_with_overlaps += 1
-                break  # Count overlap only once per nucleus
-
-        # Nearest neighbor distance
-        distances = distance.cdist([centroid], centroids, 'euclidean')
-        if len(distances.flatten()) > 1:
-            nearest_distance = np.partition(distances.flatten(), 1)[1]  # Skip distance to itself
-            nearest_neighbor_distances.append(nearest_distance)
-
-        # Nucleus type classification
-        nucleus_type = nucleus.get('type', None)
-        if nucleus_type == 1:
-            type_distribution['neoplastic_epithelial'] += 1
-        elif nucleus_type == 2:
-            type_distribution['inflammatory'] += 1
-        elif nucleus_type == 3:
-            type_distribution['connective'] += 1
-        elif nucleus_type == 4:
-            type_distribution['dead_cells'] += 1
-        else:
-            type_distribution['other'] += 1
-
-    avg_area = total_area / total_nuclei if total_nuclei > 0 else 0
-    avg_aspect_ratio = total_aspect_ratio / total_nuclei if total_nuclei > 0 else 0
-    avg_probability = np.mean(confidences) if confidences else 0
-    avg_nearest_neighbor_distance = np.mean(nearest_neighbor_distances) if nearest_neighbor_distances else 0
-
-    # Assuming a given area of the tile (in mm²), calculate density
-    # Adjust 'tile_area' according to the actual area covered by the image
-    tile_area = 1  # Placeholder value; replace with actual area if available
-    nuclei_density = total_nuclei / tile_area if tile_area > 0 else 0
-
-    metrics = {
-        'total_nuclei': total_nuclei,
-        'nucleus_type_distribution': type_distribution,
-        'average_nucleus_area': avg_area,
-        'average_aspect_ratio': avg_aspect_ratio,
-        'nearest_neighbor_distance': avg_nearest_neighbor_distance,
-        'nuclei_density': nuclei_density,
-        'confidence_score_distribution': {
-            'average_confidence': avg_probability,
-            'low_confidence_count': len([c for c in confidences if c < 0.5])
-        },
-        'nuclei_with_overlaps': nuclei_with_overlaps
-    }
-
-    return metrics
-
-# Calculate the metrics and save to a JSON file
-metrics = calculate_metrics(nuclei_predictions)
-metrics_output_path = os.path.join(output_dir_for_image, 'segmentation_metrics.json')
-with open(metrics_output_path, 'w') as f:
-    json.dump(metrics, f, indent=4)
-
-logger.info(f"Segmentation metrics saved to {metrics_output_path}")
+# End processing
+end_time = time.time()
+total_time = end_time - start_time
+formatted_total_time = format_time(total_time)
+logger.info(f"Total processing time: {formatted_total_time}")
