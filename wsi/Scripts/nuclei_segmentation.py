@@ -1,16 +1,14 @@
 import argparse
 import os
 import joblib
-import matplotlib.pyplot as plt
-from tiatoolbox.models.engine.nucleus_instance_segmentor import NucleusInstanceSegmentor
-from tiatoolbox.utils.visualization import overlay_prediction_contours
-from tiatoolbox.wsicore.wsireader import WSIReader
-from skimage import measure
 import logging
 import torch
 import json
 import numpy as np
 from scipy.spatial import distance
+from skimage.measure import regionprops
+from tiatoolbox.models.engine.nucleus_instance_segmentor import NucleusInstanceSegmentor
+from tiatoolbox.models.engine.semantic_segmentor import IOSegmentorConfig
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -66,28 +64,32 @@ segmentor = NucleusInstanceSegmentor(
 if args.mode == "wsi":
     logger.info(f"Running segmentation on WSI: {args.input}")
     try:
-        # Load the WSI and pass its file path (not the WSIReader object itself)
-        wsi_path = args.input
-        
-        # Segment the WSI at a specific resolution (use mpp_value)
-        resolution = {"mpp": (mpp_value, mpp_value)}
-        logger.info(f"Using resolution: {resolution} for WSI segmentation.")
-        
-        # Perform segmentation on the WSI by passing the file path (not the WSIReader object)
+        # Ensure args.input is a string
+        if not isinstance(args.input, str):
+            logger.error("The input path must be a string.")
+            exit(1)
+
+        # Create an IOConfig object for WSI processing
+        ioconfig = IOSegmentorConfig(
+            input_resolutions=[{"mpp": mpp_value}],
+            output_resolutions=[{"mpp": mpp_value}],
+            save_resolution={"mpp": mpp_value}
+        )
+
+        # Run the segmentation
         output = segmentor.predict(
-            imgs=[wsi_path],  # Use the path, not the WSIReader object
+            imgs=[args.input],
             save_dir=args.output_dir,
             mode='wsi',
-            resolution=resolution,
+            ioconfig=ioconfig,
             on_gpu=args.gpu,
             crash_on_exception=False
         )
-        
     except Exception as e:
         logger.error(f"Segmentation failed for WSI: {e}")
         exit(1)
-
 else:
+    # Tile mode
     logger.info(f"Running segmentation on Tile: {args.input}")
     try:
         output = segmentor.predict(
@@ -104,35 +106,37 @@ else:
 logger.debug(f"Segmentation output: {output}")
 
 # Get the correct path to the output file
-output_dir_for_image = args.output_dir
+image_basename = os.path.splitext(os.path.basename(args.input))[0]
+output_dir_for_image = os.path.join(args.output_dir, image_basename)
 logger.info(f"Segmentation results saved in: {output_dir_for_image}")
 
-# Check if the output directory is structured correctly and contains segmentation results
-seg_result_files = os.listdir(output_dir_for_image)
-if not seg_result_files:
-    logger.error(f"No segmentation result files found in {output_dir_for_image}")
+# Check if the output directory exists
+if not os.path.exists(output_dir_for_image):
+    logger.error(f"Output directory not found: {output_dir_for_image}")
     exit(1)
 
-# Find the instance map file (usually named '0.dat')
-inst_map_path = os.path.join(output_dir_for_image, '0.dat')
+# Find the instance map file (e.g., 'inst_map.dat')
+inst_map_path = os.path.join(output_dir_for_image, 'inst_map.dat')
+if not os.path.exists(inst_map_path):
+    logger.error(f"No instance map file found in {output_dir_for_image}")
+    exit(1)
 
 # Load the segmentation results
 try:
     logger.info(f"Loading segmentation results from {inst_map_path}")
-    nuclei_predictions = joblib.load(inst_map_path)
-    logger.info(f"Number of detected nuclei: {len(nuclei_predictions)}")
-except FileNotFoundError:
-    logger.error(f"Segmentation result file not found: {inst_map_path}")
+    inst_map = joblib.load(inst_map_path)
+    logger.info(f"Instance map loaded with shape: {inst_map.shape}")
+except Exception as e:
+    logger.error(f"Failed to load segmentation results: {e}")
     exit(1)
 
 # Calculate metrics
-def calculate_metrics(nuclei_predictions):
+def calculate_metrics(inst_map):
+    props = regionprops(inst_map)
     total_area = 0
     total_aspect_ratio = 0
-    total_nuclei = len(nuclei_predictions)
-    total_probability = 0
+    total_nuclei = len(props)
     nearest_neighbor_distances = []
-    nuclei_with_overlaps = 0
 
     type_distribution = {
         'neoplastic_epithelial': 0,
@@ -142,42 +146,26 @@ def calculate_metrics(nuclei_predictions):
         'other': 0
     }
 
-    confidences = []
-    centroids = []
-    
-    # Gather centroids for nearest neighbor calculation
-    for _, nucleus in nuclei_predictions.items():
-        centroids.append(np.array(nucleus['centroid']))
+    centroids = [prop.centroid for prop in props]
 
-    # Calculate metrics for each nucleus
-    for _, nucleus in nuclei_predictions.items():
-        box_area = (nucleus['box'][2] - nucleus['box'][0]) * (nucleus['box'][3] - nucleus['box'][1])
-        total_area += box_area
+    for prop in props:
+        area = prop.area
+        total_area += area
 
         # Calculate aspect ratio
-        width = nucleus['box'][2] - nucleus['box'][0]
-        height = nucleus['box'][3] - nucleus['box'][1]
-        aspect_ratio = width / height
+        minr, minc, maxr, maxc = prop.bbox
+        width = maxc - minc
+        height = maxr - minr
+        aspect_ratio = width / height if height != 0 else 0
         total_aspect_ratio += aspect_ratio
 
-        # Confidence score
-        confidences.append(nucleus.get('prob', 0))
-
-        # Check for overlaps (bounding boxes overlap)
-        for _, other_nucleus in nuclei_predictions.items():
-            if np.array_equal(nucleus['box'], other_nucleus['box']):
-                continue  # Skip comparison with itself
-            if np.any(np.intersect1d(nucleus['box'], other_nucleus['box'])):
-                nuclei_with_overlaps += 1
-                break  # Count overlap only once per nucleus
-
         # Nearest neighbor distance
-        distances = distance.cdist([nucleus['centroid']], centroids, 'euclidean')
+        distances = distance.cdist([prop.centroid], centroids, 'euclidean')
         nearest_distance = np.partition(distances.flatten(), 1)[1]  # Skip distance to itself
         nearest_neighbor_distances.append(nearest_distance)
 
-        # Nucleus type classification
-        nucleus_type = nucleus.get('type', None)
+        # Nucleus type classification (if available)
+        nucleus_type = prop.label  # Adjust based on your data
         if nucleus_type == 1:
             type_distribution['neoplastic_epithelial'] += 1
         elif nucleus_type == 2:
@@ -191,8 +179,7 @@ def calculate_metrics(nuclei_predictions):
 
     avg_area = total_area / total_nuclei if total_nuclei > 0 else 0
     avg_aspect_ratio = total_aspect_ratio / total_nuclei if total_nuclei > 0 else 0
-    avg_probability = np.mean(confidences)
-    avg_nearest_neighbor_distance = np.mean(nearest_neighbor_distances)
+    avg_nearest_neighbor_distance = np.mean(nearest_neighbor_distances) if nearest_neighbor_distances else 0
 
     # Assuming a given area of the tile (in mm²), calculate density
     tile_area = 1  # In mm², adjust according to your actual data
@@ -204,19 +191,13 @@ def calculate_metrics(nuclei_predictions):
         'average_nucleus_area': avg_area,
         'average_aspect_ratio': avg_aspect_ratio,
         'nearest_neighbor_distance': avg_nearest_neighbor_distance,
-        'nuclei_density': nuclei_density,
-        'confidence_score_distribution': {
-            'average_confidence': avg_probability,
-            'low_confidence_count': len([c for c in confidences if c < 0.5])
-        },
-        'nuclei_with_overlaps': nuclei_with_overlaps
+        'nuclei_density': nuclei_density
     }
 
     return metrics
 
-
 # Calculate the metrics and save to a JSON file
-metrics = calculate_metrics(nuclei_predictions)
+metrics = calculate_metrics(inst_map)
 metrics_output_path = os.path.join(output_dir_for_image, 'segmentation_metrics.json')
 with open(metrics_output_path, 'w') as f:
     json.dump(metrics, f, indent=4)
