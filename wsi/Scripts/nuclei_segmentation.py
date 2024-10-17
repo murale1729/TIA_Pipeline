@@ -69,11 +69,17 @@ if args.mode == "wsi":
             logger.error("The input path must be a string.")
             exit(1)
 
+        # Define the patch shapes (adjust as needed)
+        patch_input_shape = [270, 270]   # Example input patch size
+        patch_output_shape = [80, 80]    # Example output patch size
+
         # Create an IOConfig object for WSI processing
         ioconfig = IOSegmentorConfig(
             input_resolutions=[{"mpp": mpp_value}],
             output_resolutions=[{"mpp": mpp_value}],
-            save_resolution={"mpp": mpp_value}
+            save_resolution={"mpp": mpp_value},
+            patch_input_shape=patch_input_shape,
+            patch_output_shape=patch_output_shape
         )
 
         # Run the segmentation
@@ -165,7 +171,10 @@ def calculate_metrics(inst_map):
         nearest_neighbor_distances.append(nearest_distance)
 
         # Nucleus type classification (if available)
-        nucleus_type = prop.label  # Adjust based on your data
+        # Here, 'type_map' may be needed from the segmentation results
+        nucleus_type = 0  # Default to 'other' if type is not available
+        # Adjust based on your data; this is a placeholder
+
         if nucleus_type == 1:
             type_distribution['neoplastic_epithelial'] += 1
         elif nucleus_type == 2:
