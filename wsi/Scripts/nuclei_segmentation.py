@@ -66,19 +66,16 @@ segmentor = NucleusInstanceSegmentor(
 if args.mode == "wsi":
     logger.info(f"Running segmentation on WSI: {args.input}")
     try:
-        # Load WSI with WSIReader
-        wsi_reader = WSIReader.open(args.input)
-        
-        if wsi_reader is None:
-            raise ValueError(f"Failed to load WSI: {args.input}")
+        # Load the WSI and pass its file path (not the WSIReader object itself)
+        wsi_path = args.input
         
         # Segment the WSI at a specific resolution (use mpp_value)
         resolution = {"mpp": (mpp_value, mpp_value)}
         logger.info(f"Using resolution: {resolution} for WSI segmentation.")
         
-        # Perform segmentation on the WSI
+        # Perform segmentation on the WSI by passing the file path (not the WSIReader object)
         output = segmentor.predict(
-            imgs=[wsi_reader],
+            imgs=[wsi_path],  # Use the path, not the WSIReader object
             save_dir=args.output_dir,
             mode='wsi',
             resolution=resolution,
@@ -110,14 +107,23 @@ logger.debug(f"Segmentation output: {output}")
 output_dir_for_image = args.output_dir
 logger.info(f"Segmentation results saved in: {output_dir_for_image}")
 
-# Define the path to the instance map file
+# Check if the output directory is structured correctly and contains segmentation results
+seg_result_files = os.listdir(output_dir_for_image)
+if not seg_result_files:
+    logger.error(f"No segmentation result files found in {output_dir_for_image}")
+    exit(1)
+
+# Find the instance map file (usually named '0.dat')
 inst_map_path = os.path.join(output_dir_for_image, '0.dat')
 
 # Load the segmentation results
-logger.info(f"Loading segmentation results from {inst_map_path}")
-nuclei_predictions = joblib.load(inst_map_path)
-
-logger.info(f"Number of detected nuclei: {len(nuclei_predictions)}")
+try:
+    logger.info(f"Loading segmentation results from {inst_map_path}")
+    nuclei_predictions = joblib.load(inst_map_path)
+    logger.info(f"Number of detected nuclei: {len(nuclei_predictions)}")
+except FileNotFoundError:
+    logger.error(f"Segmentation result file not found: {inst_map_path}")
+    exit(1)
 
 # Calculate metrics
 def calculate_metrics(nuclei_predictions):
