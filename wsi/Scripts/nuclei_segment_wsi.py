@@ -56,7 +56,7 @@ segmentor = NucleusInstanceSegmentor(
     pretrained_model="hovernet_fast-pannuke",
     num_loader_workers=8,  # Increased number of data loader workers
     num_postproc_workers=8,  # Increased number of post-processing workers
-    batch_size=16,  # Increased batch size
+    batch_size=32,  # Increased batch size
     auto_generate_mask=False
 )
 
@@ -71,11 +71,11 @@ if args.mode == "wsi":
         patch_input_shape = [540, 540]   # Larger input patch size
         patch_output_shape = [160, 160]  # Corresponding output patch size
 
-        # Create an IOConfig object for WSI processing
+        # Create an IOConfig object for WSI processing with 'units' specified
         ioconfig = IOSegmentorConfig(
-            input_resolutions=[{"mpp": mpp_value}],
-            output_resolutions=[{"mpp": mpp_value}],
-            save_resolution={"mpp": mpp_value},
+            input_resolutions=[{"units": "mpp", "resolution": mpp_value}],
+            output_resolutions=[{"units": "mpp", "resolution": mpp_value}],
+            save_resolution={"units": "mpp", "resolution": mpp_value},
             patch_input_shape=patch_input_shape,
             patch_output_shape=patch_output_shape
         )
