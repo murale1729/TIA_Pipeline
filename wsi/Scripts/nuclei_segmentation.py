@@ -21,6 +21,8 @@ parser.add_argument('--output_dir', type=str, help='Directory to save output res
 parser.add_argument('--mode', type=str, default="tile", choices=["wsi", "tile"], help='Processing mode: "wsi" or "tile"')
 parser.add_argument('--gpu', action='store_true', help='Use GPU for processing')
 parser.add_argument('--default_mpp', type=float, help="Default MPP if not found in metadata", default=0.5)
+parser.add_argument('--units', type=str, choices=["mpp", "power"], default="mpp", help='Units to interpret resolution: "mpp" for microns per pixel, or "power" for objective power')
+
 args = parser.parse_args()
 
 # Check for GPU usage
@@ -32,13 +34,20 @@ logger.debug(f"Input arguments: {args}")
 
 # Load the WSI and extract metadata from the input SVS file
 wsi_reader = WSIReader.open(args.input)
-
-# Extract metadata from the SVS file
 metadata = wsi_reader.info.as_dict()
 
-# Use MPP from metadata if available, otherwise fall back to the default MPP
-mpp = metadata.get('mpp', args.default_mpp)
-logger.info(f"Microns per pixel (MPP) used: {mpp}")
+# Use MPP or Power from metadata if available, otherwise fall back to the default MPP
+if args.units == "mpp":
+    mpp = metadata.get('mpp', args.default_mpp)
+    logger.info(f"Microns per pixel (MPP) used: {mpp}")
+elif args.units == "power":
+    # Handle case if the user specifies power (objective magnification)
+    power = metadata.get('objective_power', None)
+    if power is not None:
+        logger.info(f"Objective power used: {power}")
+    else:
+        logger.error("Objective power not found in metadata.")
+        exit(1)
 
 # Initialize NucleusInstanceSegmentor
 logger.info("Initializing NucleusInstanceSegmentor")
