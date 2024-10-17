@@ -2,14 +2,14 @@ import argparse
 import os
 import logging
 import torch
-import json
 import numpy as np
+import time
 from math import ceil
 from tiatoolbox.models.engine.nucleus_instance_segmentor import NucleusInstanceSegmentor
 from tiatoolbox.wsicore.wsireader import WSIReader
-import time
 
-logging.basicConfig(level=logging.DEBUG)
+# Set up logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Parsing input arguments
@@ -18,6 +18,9 @@ parser.add_argument('--input', type=str, help='Path to normalized image or WSI',
 parser.add_argument('--output_dir', type=str, help='Directory to save output results', required=True)
 parser.add_argument('--gpu', action='store_true', help='Use GPU for processing')
 parser.add_argument('--default_mpp', type=float, help="Default MPP if not found in metadata", default=0.5)
+parser.add_argument('--batch_size', type=int, help='Batch size for processing', default=64)
+parser.add_argument('--num_loader_workers', type=int, help='Number of data loader workers', default=16)
+parser.add_argument('--num_postproc_workers', type=int, help='Number of post-processing workers', default=16)
 args = parser.parse_args()
 
 # Check for GPU usage
@@ -48,9 +51,9 @@ logger.info(f"Microns per pixel (MPP) used: {mpp_value}")
 logger.info("Initializing NucleusInstanceSegmentor")
 segmentor = NucleusInstanceSegmentor(
     pretrained_model="hovernet_fast-pannuke",
-    num_loader_workers=32,   # Adjust based on your system
-    num_postproc_workers=16, # Adjust based on your system
-    batch_size=64,           # Adjust based on your GPU memory
+    num_loader_workers=args.num_loader_workers,   # Adjust based on your system
+    num_postproc_workers=args.num_postproc_workers, # Adjust based on your system
+    batch_size=args.batch_size,           # Adjust based on your GPU memory
     auto_generate_mask=False
 )
 segmentor.model.to(device)
@@ -62,7 +65,10 @@ stride = [tile_size[0] - tile_overlap[0], tile_size[1] - tile_overlap[1]]
 
 # Calculate total tiles
 wsi_dimensions = wsi_reader.slide_dimensions
-total_tiles = calculate_total_tiles(wsi_dimensions, tile_size, stride)
+total_tiles = 1
+for dim, size, st in zip(wsi_dimensions, tile_size, stride):
+    num_tiles = ceil((dim - size) / st) + 1
+    total_tiles *= num_tiles
 logger.info(f"Total tiles to process: {total_tiles}")
 
 # Load processed tiles log
@@ -86,16 +92,17 @@ processed_tiles = load_processed_tiles()
 from tiatoolbox.utils.misc import get_tile_coords
 
 tile_coords = get_tile_coords(
-    wsi_dimensions,
+    wsi_dimensions=wsi_dimensions,
     tile_size=tile_size,
     stride=stride
 )
 
 # Start processing
 start_time = time.time()
+processed_count = len(processed_tiles)
 for idx, coords in enumerate(tile_coords):
     if idx in processed_tiles:
-        logger.info(f"Skipping tile {idx}, already processed.")
+        logger.info(f"Skipping tile {idx+1}, already processed.")
         continue
 
     logger.info(f"Processing tile {idx+1}/{total_tiles}")
@@ -125,17 +132,17 @@ for idx, coords in enumerate(tile_coords):
         # Log processed tile
         log_processed_tile(idx)
         processed_tiles.add(idx)
+        processed_count += 1
 
         # Remove temporary tile image
         os.remove(tile_image_path)
 
         # Estimate progress
-        processed_count = len(processed_tiles)
         progress = (processed_count / total_tiles) * 100
         elapsed_time = time.time() - start_time
         estimated_total_time = (elapsed_time / processed_count) * total_tiles
         remaining_time = estimated_total_time - elapsed_time
-        formatted_remaining_time = format_time(remaining_time)
+        formatted_remaining_time = time.strftime("%Hh %Mm %Ss", time.gmtime(remaining_time))
         logger.info(f"Progress: {progress:.2f}% | Estimated remaining time: {formatted_remaining_time}")
 
     except Exception as e:
@@ -146,5 +153,5 @@ for idx, coords in enumerate(tile_coords):
 # End processing
 end_time = time.time()
 total_time = end_time - start_time
-formatted_total_time = format_time(total_time)
+formatted_total_time = time.strftime("%Hh %Mm %Ss", time.gmtime(total_time))
 logger.info(f"Total processing time: {formatted_total_time}")
