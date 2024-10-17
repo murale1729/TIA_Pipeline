@@ -36,18 +36,19 @@ logger.debug(f"Input arguments: {args}")
 wsi_reader = WSIReader.open(args.input)
 metadata = wsi_reader.info.as_dict()
 
+# Debug: Log metadata to understand its structure
+logger.info(f"WSI Metadata: {metadata}")
+
 # Use MPP or Power from metadata if available, otherwise fall back to the default MPP
-if args.units == "mpp":
-    mpp = metadata.get('mpp', args.default_mpp)
-    logger.info(f"Microns per pixel (MPP) used: {mpp}")
-elif args.units == "power":
-    # Handle case if the user specifies power (objective magnification)
-    power = metadata.get('objective_power', None)
-    if power is not None:
-        logger.info(f"Objective power used: {power}")
-    else:
-        logger.error("Objective power not found in metadata.")
-        exit(1)
+mpp = metadata.get('mpp', args.default_mpp)
+logger.info(f"Microns per pixel (MPP) used: {mpp}")
+
+# Check if units exist in the metadata
+units = metadata.get('units', None)
+if units is None:
+    logger.warning("'units' not found in the metadata, proceeding without units.")
+else:
+    logger.info(f"Units used: {units}")
 
 # Initialize NucleusInstanceSegmentor
 logger.info("Initializing NucleusInstanceSegmentor")
